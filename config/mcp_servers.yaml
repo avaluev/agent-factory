@@ -1,0 +1,18 @@
+# MCP Server configurations
+# Each server defines how to connect to an external tool provider
+servers:
+  - name: filesystem
+    description: "Local filesystem operations — read, write, list files"
+    type: local
+    enabled: true
+  
+  - name: notion
+    description: "Notion workspace — read/write pages and databases"
+    type: remote
+    url: "https://mcp.notion.com/mcp"
+    enabled: false  # Enable after adding Notion integration token
+  
+  - name: telegram
+    description: "Telegram — send/receive messages, access chat history"
+    type: custom
+    enabled: false  # Requires custom implementation
