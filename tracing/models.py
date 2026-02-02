@@ -36,6 +36,7 @@ class SpanType(str, Enum):
 
     # Tools & Skills
     TOOL_CALL = "tool_call"
+    SKILL = "skill"
     SKILL_LOAD = "skill_load"
     SKILL_SCRIPT = "skill_script"
 

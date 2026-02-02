@@ -42,6 +42,19 @@ class AnthropicAdapter(ModelAdapter):
                     "role": "user",
                     "content": [{"type": "tool_result", "tool_use_id": msg.tool_call_id or "unknown", "content": msg.content}]
                 })
+            elif role == "assistant" and hasattr(msg, 'tool_calls') and msg.tool_calls:
+                # Assistant message with tool calls - format with tool_use blocks
+                content = []
+                if msg.content:
+                    content.append({"type": "text", "text": msg.content})
+                for tc in msg.tool_calls:
+                    content.append({
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.name,
+                        "input": tc.arguments
+                    })
+                converted.append({"role": "assistant", "content": content})
             else:
                 converted.append({"role": role, "content": msg.content})
         return converted

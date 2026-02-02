@@ -60,59 +60,77 @@ class ProjectPlannerSkill(Skill):
             idea = inputs["idea"]
             detail_level = inputs.get("detail_level", "medium")
             
-            # Use Claude for planning (better at structured reasoning)
-            planner_agent = Agent(model_adapter=AnthropicAdapter())
-            
-            planning_prompt = f"""You are a software architect and project planner. Analyze this idea and create a detailed implementation plan.
+            # Use Claude directly for planning with high token limit
+            from core.models.base import ChatMessage, MessageRole
 
-IDEA: {idea}
+            adapter = AnthropicAdapter(model="claude-sonnet-4-5-20250929")
 
-Create a plan with:
-1. **Project Overview**: Brief description and goals
-2. **Technology Stack**: Recommended technologies
-3. **Architecture**: High-level system design
-4. **Task Breakdown**: 15-30 specific implementation tasks
-5. **Dependencies**: Which tasks depend on others
-6. **Success Criteria**: How to know it's complete
-7. **Risks**: Potential challenges
+            planning_prompt = f"""Analyze this project idea and create a detailed implementation plan.
 
-For each task provide:
-- ID (task_1, task_2, etc.)
-- Title (brief, actionable)
-- Description (what needs to be done)
-- Dependencies (list of task IDs that must complete first)
-- Estimated complexity (low/medium/high)
-- Category (setup/core/feature/testing/deployment)
+PROJECT IDEA:
+{idea}
 
-Format as JSON with this structure:
+Create a comprehensive plan following this structure:
+1. Project overview and goals
+2. Recommended technology stack
+3. High-level architecture approach
+4. 15-30 specific implementation tasks with dependencies
+5. Success criteria
+6. Potential risks and challenges
+
+CRITICAL: You MUST respond with ONLY a valid JSON object. No markdown, no explanations, no code blocks - just pure JSON.
+
+Use this exact structure:
 {{
-  "overview": "...",
-  "tech_stack": ["tech1", "tech2"],
-  "architecture": "...",
+  "overview": "comprehensive project description with goals",
+  "tech_stack": ["technology1", "technology2", "..."],
+  "architecture": "high-level system design explanation",
   "tasks": [
     {{
       "id": "task_1",
-      "title": "...",
-      "description": "...",
+      "title": "short actionable title",
+      "description": "detailed description of what needs to be done",
       "dependencies": [],
-      "complexity": "medium",
-      "category": "setup"
+      "complexity": "low|medium|high",
+      "category": "setup|core|feature|testing|deployment"
     }}
   ],
-  "success_criteria": ["..."],
-  "risks": ["..."]
+  "success_criteria": ["criterion1", "criterion2"],
+  "risks": ["risk1", "risk2"]
 }}
 
-Be specific and actionable. Detail level: {detail_level}."""
-            
-            # Get plan from agent
-            plan_response = await planner_agent.run(planning_prompt)
-            
-            # Parse JSON from response
+Detail level: {detail_level}
+
+Remember: Output ONLY the JSON object, nothing else."""
+
+            # Call model directly with high token limit for complete response
+            messages = [
+                ChatMessage(role=MessageRole.USER, content=planning_prompt)
+            ]
+
+            response = await adapter.chat(
+                messages=messages,
+                tools=None,
+                temperature=0.7,
+                max_tokens=8192  # Higher limit to avoid truncation
+            )
+
+            plan_response = response.content
+
+            # Try to parse JSON from response
             plan_data = self._extract_json(plan_response)
-            
+
             if not plan_data:
-                raise ValueError("Failed to generate valid plan structure")
+                # Try markdown fallback parser
+                plan_data = self._parse_markdown_plan(plan_response)
+
+            if not plan_data:
+                # Save the full response for debugging
+                import os
+                debug_path = os.path.expanduser("~/career-automation-project/debug_plan_response.txt")
+                with open(debug_path, "w") as f:
+                    f.write(plan_response)
+                raise ValueError(f"Failed to generate valid plan structure. Full response saved to {debug_path}")
             
             execution_time = (datetime.utcnow() - start_time).total_seconds()
             
@@ -145,24 +163,142 @@ Be specific and actionable. Detail level: {detail_level}."""
                 execution_time=execution_time
             )
     
+    def _parse_markdown_plan(self, text: str) -> dict | None:
+        """Parse a markdown-formatted plan into JSON structure."""
+        import re
+
+        try:
+            plan = {
+                "overview": "",
+                "tech_stack": [],
+                "architecture": "",
+                "tasks": [],
+                "success_criteria": [],
+                "risks": []
+            }
+
+            # Extract overview (first substantial paragraph or section)
+            overview_match = re.search(r'(?:PROJECT OVERVIEW|OVERVIEW)(.*?)(?:TECHNOLOGY STACK|###|\n\n\*\*|$)', text, re.DOTALL | re.IGNORECASE)
+            if overview_match:
+                plan["overview"] = overview_match.group(1).strip()[:500]
+
+            # Extract tech stack
+            tech_match = re.search(r'(?:TECHNOLOGY STACK|TECH STACK)(.*?)(?:ARCHITECTURE|###|$)', text, re.DOTALL | re.IGNORECASE)
+            if tech_match:
+                tech_text = tech_match.group(1)
+                # Extract items from bullet points or lines starting with -
+                plan["tech_stack"] = [line.strip('- *').strip() for line in tech_text.split('\n') if line.strip().startswith(('-', '*', '•'))][:20]
+
+            # Extract architecture description
+            arch_match = re.search(r'(?:ARCHITECTURE|High-Level System Design)(.*?)(?:TASK BREAKDOWN|###|$)', text, re.DOTALL | re.IGNORECASE)
+            if arch_match:
+                plan["architecture"] = arch_match.group(1).strip()[:500]
+
+            # Extract tasks - look for **task_N: Title** pattern
+            task_pattern = r'\*\*task_(\d+):\s*([^*]+)\*\*\s*\n-\s*Description:\s*([^\n]+)(?:\n-\s*Dependencies:\s*\[([^\]]*)\])?(?:\n-\s*Complexity:\s*(\w+))?(?:\n-\s*Category:\s*(\w+))?'
+            for match in re.finditer(task_pattern, text, re.IGNORECASE):
+                task_num, title, description, deps, complexity, category = match.groups()
+                task = {
+                    "id": f"task_{task_num}",
+                    "title": title.strip(),
+                    "description": description.strip(),
+                    "dependencies": [d.strip() for d in (deps or "").split(",")] if deps else [],
+                    "complexity": (complexity or "medium").lower(),
+                    "category": (category or "core").lower()
+                }
+                plan["tasks"].append(task)
+
+            # If we found at least some tasks, return the plan
+            if len(plan["tasks"]) > 0:
+                return plan
+
+            return None
+
+        except Exception as e:
+            return None
+
+    def _complete_incomplete_json(self, json_str: str) -> dict | None:
+        """Try to complete incomplete JSON by adding missing closing structures."""
+        import json
+
+        # Count opening and closing braces/brackets
+        open_braces = json_str.count('{')
+        close_braces = json_str.count('}')
+        open_brackets = json_str.count('[')
+        close_brackets = json_str.count(']')
+
+        # Add missing closing structures
+        attempts = []
+
+        # Try adding just the missing braces
+        attempt1 = json_str
+        if attempt1.strip() and not attempt1.strip().endswith(('"', ',', '}', ']')):
+            # Ends mid-value, close the string first
+            attempt1 += '"'
+        attempt1 += '\n' + '}' * (open_braces - close_braces)
+        attempt1 += ']' * (open_brackets - close_brackets)
+        attempts.append(attempt1)
+
+        # Try adding just task array closure and main object closure
+        attempt2 = json_str
+        if '"description"' in attempt2 and not attempt2.strip().endswith(('"', '}')):
+            # Mid-description, close it
+            attempt2 += '"'
+        attempt2 += '\n    }\n  ],\n  "success_criteria": [],\n  "risks": []\n}'
+        attempts.append(attempt2)
+
+        # Try each attempt
+        for attempt in attempts:
+            try:
+                return json.loads(attempt)
+            except json.JSONDecodeError:
+                continue
+
+        return None
+
     def _extract_json(self, text: str) -> dict | None:
         """Extract JSON from text response."""
         import re
-        
-        # Try to find JSON in code blocks
-        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+
+        # Try to find JSON in complete code blocks (```json ... ```)
+        json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
         if json_match:
             try:
-                return json.loads(json_match.group(1))
+                json_str = json_match.group(1).strip()
+                return json.loads(json_str)
             except json.JSONDecodeError:
                 pass
-        
-        # Try to find raw JSON
+
+        # Try incomplete code block (```json ... without closing)
+        json_match = re.search(r'```(?:json)?\s*\n?(.*)', text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1).strip()
+            try:
+                # Try to parse as-is
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                # Try to complete incomplete JSON
+                completed = self._complete_incomplete_json(json_str)
+                if completed:
+                    return completed
+
+                # Try to find just the JSON object within it
+                inner_match = re.search(r'\{.*\}', json_str, re.DOTALL)
+                if inner_match:
+                    try:
+                        return json.loads(inner_match.group(0))
+                    except json.JSONDecodeError:
+                        # Try completing this too
+                        completed = self._complete_incomplete_json(inner_match.group(0))
+                        if completed:
+                            return completed
+
+        # Try to find raw JSON (greedy match for nested objects)
         json_match = re.search(r'\{.*\}', text, re.DOTALL)
         if json_match:
             try:
                 return json.loads(json_match.group(0))
             except json.JSONDecodeError:
                 pass
-        
+
         return None

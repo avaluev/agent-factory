@@ -70,7 +70,7 @@ class LongTermMemory:
         
         tracer = Tracer.instance()
         span = tracer.start_span(
-            SpanType.MEMORY,
+            SpanType.MEMORY_OP,
             name="ltm_store",
             input_data={"category": category, "importance": importance}
         )
@@ -134,7 +134,7 @@ class LongTermMemory:
         
         tracer = Tracer.instance()
         span = tracer.start_span(
-            SpanType.MEMORY,
+            SpanType.MEMORY_OP,
             name="ltm_recall",
             input_data={"query": query[:100], "category": category, "top_k": top_k}
         )

@@ -17,6 +17,7 @@ class ChatMessage:
     content: str
     tool_call_id: str | None = None
     tool_name: str | None = None
+    tool_calls: list["ToolCall"] | None = None  # For assistant messages with tool calls
     metadata: dict | None = None
 
 

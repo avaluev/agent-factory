@@ -141,20 +141,27 @@ class Agent:
 
                 # LLM wants to call tools
                 tool_names_called = []
+
+                # Add ASSISTANT message with tool_calls ONCE before all tool results
+                messages.append(ChatMessage(
+                    role=MessageRole.ASSISTANT,
+                    content=response.content or "",
+                    tool_calls=response.tool_calls
+                ))
+
+                # Execute each tool and add tool result messages
                 for tc in response.tool_calls:
                     tool_names_called.append(tc.name)
                     try:
                         # Execute tool — tool_registry traces this as a tool_call span
                         tool_result = await self.tool_registry.execute(tc.name, tc.arguments)
                         # Feed result back as a message
-                        messages.append(ChatMessage(role=MessageRole.ASSISTANT, content=response.content or ""))
                         messages.append(ChatMessage(
                             role=MessageRole.TOOL,
                             content=str(tool_result),
                             tool_call_id=tc.id if hasattr(tc, 'id') else tc.name,
                         ))
                     except Exception as e:
-                        messages.append(ChatMessage(role=MessageRole.ASSISTANT, content=response.content or ""))
                         messages.append(ChatMessage(
                             role=MessageRole.TOOL,
                             content=f"ERROR: {e}",

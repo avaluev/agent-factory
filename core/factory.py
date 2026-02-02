@@ -91,12 +91,14 @@ class SystemBuilderFactory:
             print(f"📋 Generating implementation plan...")
             
             # Step 1: Generate plan using ProjectPlanner skill
+            from skills.base import SkillStatus
+
             plan_result = await self.skill_executor.execute(
                 "project_planner",
                 {"idea": idea, "detail_level": detail_level}
             )
-            
-            if plan_result.status != "success":
+
+            if plan_result.status != SkillStatus.SUCCESS:
                 raise ValueError(f"Planning failed: {plan_result.error}")
             
             plan_data = plan_result.output["plan"]
